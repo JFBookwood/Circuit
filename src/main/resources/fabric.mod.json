@@ -8,7 +8,7 @@
 	"authors": [
 		"cirby"
 	],
-	"license": "MIT",
+	"license": "CC-BY-NC-ND-4.0",
 	"environment": "*",
 	"entrypoints": {
 		"main": [

@@ -52,4 +52,4 @@ This is a small personal project by cirby. Issues, bug reports, ideas, and pull 
 
 ## License
 
-MIT
+CC BY-NC-ND 4.0
