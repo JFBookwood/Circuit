@@ -1,0 +1,10 @@
+.gradle/
+build/
+run/
+logs/
+generated/
+/.sixth/
+/de/
+/modrinth/
+*.log
+*.tmp

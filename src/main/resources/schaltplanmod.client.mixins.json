@@ -1,0 +1,15 @@
+{
+	"required": true,
+	"package": "de.jesse.schaltplanmod.mixin.client",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"CreateWorldScreenMixin",
+		"LevelLoadingScreenMixin",
+		"LoadingOverlayMixin",
+		"ReceivingLevelScreenMixin",
+		"TitleScreenMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
