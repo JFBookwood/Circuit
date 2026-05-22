@@ -37,7 +37,7 @@ I built this because larger redstone projects get messy fast. Being able to sket
 The mod jar will be in:
 
 ```text
-build/libs/circuit-1.0.0.jar
+build/libs/circuit-1.0.1.jar
 ```
 
 ## Notes
