@@ -9,6 +9,7 @@ public enum CircuitComponentType {
 	NOT("NOT", "not.litematic", CircuitComponentCategory.GATES),
 	NAND("NAND", "nand.litematic", CircuitComponentCategory.GATES),
 	XOR("XOR", "xor.litematic", CircuitComponentCategory.GATES),
+	COMPACT_FULL_ADDER("Compact Full Adder", "compact_full_adder.litematic", CircuitComponentCategory.GATES),
 	WIRE("Wire", "wire_redstone_dust.litematic", CircuitComponentCategory.WIRING),
 	OBSERVER_WIRE("Observer Wire", "wire_observer.litematic", CircuitComponentCategory.WIRING),
 	REPEATER_DELAY("Repeater / Delay", "repeater_delay_element.litematic", CircuitComponentCategory.WIRING),

@@ -15,6 +15,7 @@ public class PlanSaveScreen extends Screen {
 	private EditBox nameBox;
 	private List<Path> files = List.of();
 	private String message = "";
+	private String currentName = "default";
 
 	public PlanSaveScreen(SchaltplanEditorScreen editor, Screen parent) {
 		super(Component.literal("Save Circuit"));
@@ -27,13 +28,14 @@ public class PlanSaveScreen extends Screen {
 		files = SchaltplanPlanStorage.listPlanFiles();
 		int center = width / 2;
 		nameBox = new EditBox(font, center - 154, 48, 180, 20, Component.literal("Name"));
-		nameBox.setValue("default");
+		nameBox.setValue(currentName);
 		nameBox.setMaxLength(40);
 		addRenderableWidget(nameBox);
 
 		addRenderableWidget(Button.builder(Component.literal("Save"), button -> {
-			editor.savePlanNamed(nameBox.getValue());
-			message = "Saved: " + nameBox.getValue();
+			currentName = nameBox.getValue();
+			editor.savePlanNamed(currentName);
+			message = "Saved: " + currentName;
 			rebuildWidgets();
 		}).bounds(center + 34, 48, 58, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("Back"), button -> {
@@ -45,7 +47,8 @@ public class PlanSaveScreen extends Screen {
 		for (int index = 0; index < maxVisible; index++) {
 			Path file = files.get(index);
 			addRenderableWidget(Button.builder(Component.literal(displayLabel(file)), button -> {
-				nameBox.setValue(stripExtension(file.getFileName().toString()));
+				currentName = stripExtension(file.getFileName().toString());
+				nameBox.setValue(currentName);
 			}).bounds(center - 154, y, 212, 20).build());
 			addRenderableWidget(Button.builder(Component.literal("Delete"), button -> {
 				SchaltplanPlanStorage.deletePlanFile(file);

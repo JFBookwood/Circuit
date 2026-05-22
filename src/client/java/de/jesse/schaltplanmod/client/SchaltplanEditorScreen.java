@@ -209,9 +209,13 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				}
 				if (existingIndex >= 0) {
 					pushUndo();
-					removeComponentOrGroup(existingIndex);
-					selectedComponentIndex = -1;
-					selectedComponentIndexes.clear();
+					if (selectedComponentIndexes.contains(existingIndex) && selectedComponentIndexes.size() > 1) {
+						removeSelectedComponents();
+					} else {
+						removeComponentOrGroup(existingIndex);
+						selectedComponentIndex = -1;
+						selectedComponentIndexes.clear();
+					}
 				}
 				return true;
 			}
@@ -263,7 +267,11 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			}
 
 			if (existingIndex >= 0) {
-				selectComponentOrGroup(existingIndex);
+				if (!selectedComponentIndexes.contains(existingIndex)) {
+					selectComponentOrGroup(existingIndex);
+				} else {
+					selectedComponentIndex = existingIndex;
+				}
 				PlacedComponent placed = placedComponents.get(existingIndex);
 				int clickedGridX = screenToGridX((int) mouseX);
 				int clickedGridZ = screenToGridZ((int) mouseY);
@@ -622,6 +630,9 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			String label = schematic.displayName() + (placed.rotation() == 0 ? "" : " R" + placed.rotation() * 90);
 			graphics.drawCenteredString(font, label, x + w / 2, y + Math.max(5, h / 2 - 4), 0xffffffff);
 		}
+		if (!ghost && schematic.type() == CircuitComponentType.REPEATER_DELAY) {
+			renderRepeaterDirection(graphics, x, y, w, h, placed.rotation());
+		}
 
 		for (SchematicPort port : schematic.ports()) {
 			int color = port.role() == PortRole.INPUT ? 0xff68d96f : 0xffff74d4;
@@ -662,6 +673,36 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			graphics.renderOutline(x + 1 + inset, y + 1 + inset, Math.max(2, cellSize - 2 - inset), Math.max(2, cellSize - 2 - inset), ghost ? 0x55394450 : block.position().y() == layer ? 0xffffffff : 0xff15191f);
 			if (!ghost && cellSize >= 12 && block.position().y() > 0) {
 				graphics.drawString(font, Integer.toString(block.position().y()), x + 2, y + 2, 0xffffffff, false);
+			}
+		}
+		if (!ghost && placed.schematic().type() == CircuitComponentType.REPEATER_DELAY) {
+			int w = Math.max(cellSize, rotatedSizeX(placed) * cellSize);
+			int h = Math.max(cellSize, rotatedSizeZ(placed) * cellSize);
+			renderRepeaterDirection(graphics, baseX, baseY, w, h, placed.rotation());
+		}
+	}
+
+	private void renderRepeaterDirection(GuiGraphics graphics, int x, int y, int w, int h, int rotation) {
+		int cx = x + w / 2;
+		int cy = y + h / 2;
+		int length = Math.max(5, Math.min(w, h) / 2 - 2);
+		int color = 0xffffffff;
+		switch (Math.floorMod(rotation, 4)) {
+			case 1 -> {
+				graphics.vLine(cx, cy - length, cy + length, color);
+				graphics.fill(cx - 3, cy + length - 3, cx + 4, cy + length + 1, color);
+			}
+			case 2 -> {
+				graphics.hLine(cx - length, cx + length, cy, color);
+				graphics.fill(cx - length - 1, cy - 3, cx - length + 4, cy + 4, color);
+			}
+			case 3 -> {
+				graphics.vLine(cx, cy - length, cy + length, color);
+				graphics.fill(cx - 3, cy - length - 1, cx + 4, cy - length + 4, color);
+			}
+			default -> {
+				graphics.hLine(cx - length, cx + length, cy, color);
+				graphics.fill(cx + length - 3, cy - 3, cx + length + 1, cy + 4, color);
 			}
 		}
 	}
@@ -1304,6 +1345,9 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 
 	public void loadPlanFromFile(java.nio.file.Path path, boolean append) {
 		List<PlacedComponent> loaded = SchaltplanPlanStorage.loadFile(path, schematics);
+		if (append) {
+			loaded = remapImportedPlanesToActivePlane(loaded);
+		}
 
 		if (!append) {
 			placedComponents.clear();
@@ -1317,6 +1361,13 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 	}
 
+	private List<PlacedComponent> remapImportedPlanesToActivePlane(List<PlacedComponent> components) {
+		int lowestPlane = components.stream().mapToInt(PlacedComponent::plane).min().orElse(0);
+		return components.stream()
+				.map(component -> component.onPlane(activePlane + Math.max(0, component.plane() - lowestPlane)))
+				.toList();
+	}
+
 	private void removeComponentOrGroup(int index) {
 		long groupId = placedComponents.get(index).groupId();
 		if (groupId == 0L) {
@@ -1325,6 +1376,18 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 
 		placedComponents.removeIf(component -> component.groupId() == groupId);
+	}
+
+	private void removeSelectedComponents() {
+		List<Integer> indexes = selectedComponentIndexes.stream()
+				.filter(index -> index >= 0 && index < placedComponents.size())
+				.sorted(Comparator.reverseOrder())
+				.toList();
+		for (int index : indexes) {
+			placedComponents.remove(index);
+		}
+		selectedComponentIndex = -1;
+		selectedComponentIndexes.clear();
 	}
 
 	private void moveComponentOrGroup(int index, int deltaX, int deltaZ) {
