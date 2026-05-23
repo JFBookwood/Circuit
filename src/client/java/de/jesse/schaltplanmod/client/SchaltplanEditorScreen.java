@@ -1855,11 +1855,16 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		int repeaterCount = 0;
 		int observerCount = 0;
 		int sourceCount = 0;
+		int rawDustCount = 0;
+		int skippedComponentOverlap = 0;
 		for (int x = bounds.minX(); x <= bounds.maxX(); x++) {
 			for (int y = bounds.minY(); y <= bounds.maxY(); y++) {
 				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
 					BlockPos pos = new BlockPos(x, y, z);
 					BlockState state = minecraft.level.getBlockState(pos);
+					if (state.is(Blocks.REDSTONE_WIRE) || state.getBlock() == Blocks.REDSTONE_WIRE) {
+						rawDustCount++;
+					}
 					if (!isWorldRedstoneComponent(state)) {
 						continue;
 					}
@@ -1884,7 +1889,8 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 						gridX = gridPoint.x();
 						gridZ = gridPoint.z();
 					}
-					if (nonWireComponentAt(gridX, gridZ, plane)) {
+					if (type != CircuitComponentType.WIRE && nonWireComponentAt(gridX, gridZ, plane)) {
+						skippedComponentOverlap++;
 						continue;
 					}
 					scanned.add(new ScannedRedstone(type, gridX, gridZ, rotation, plane, schematic));
@@ -1902,7 +1908,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 
 		if (scanned.isEmpty()) {
-			minecraft.player.displayClientMessage(Component.literal("World scan found no redstone in the Circuit area. Existing editor wires were kept."), false);
+			minecraft.player.displayClientMessage(Component.literal("World scan found no imported redstone in the Circuit area. Raw dust blocks seen: " + rawDustCount + ". Existing editor wires were kept."), false);
 			return;
 		}
 
@@ -1912,7 +1918,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		refreshNextGroupId();
 		SchaltplanPlanStorage.saveCurrent(placedComponents);
 		minecraft.player.displayClientMessage(Component.literal("World scan imported " + scanned.size()
-				+ " redstone parts (" + dustCount + " dust, " + repeaterCount + " repeaters, " + observerCount + " observers, " + sourceCount + " sources)."), false);
+				+ " redstone parts (" + dustCount + " dust, " + repeaterCount + " repeaters, " + observerCount + " observers, " + sourceCount + " sources, " + skippedComponentOverlap + " overlaps skipped)."), false);
 	}
 
 	private ScanBounds scanBounds(BlockPos origin) {
@@ -1931,7 +1937,15 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				maxY = Math.max(maxY, pos.getY());
 				maxZ = Math.max(maxZ, pos.getZ());
 			}
-			return new ScanBounds(minX - 8, minY - 4, minZ - 8, maxX + 8, maxY + 6, maxZ + 8);
+			BlockPos center = minecraft.player.blockPosition();
+			return new ScanBounds(
+					Math.min(minX - 8, center.getX() - 24),
+					Math.min(minY - 4, center.getY() - 8),
+					Math.min(minZ - 8, center.getZ() - 24),
+					Math.max(maxX + 8, center.getX() + 24),
+					Math.max(maxY + 6, center.getY() + 16),
+					Math.max(maxZ + 8, center.getZ() + 24)
+			);
 		}
 
 		if (!placedComponents.isEmpty()) {
