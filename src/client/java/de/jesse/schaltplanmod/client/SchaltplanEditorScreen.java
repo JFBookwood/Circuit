@@ -578,15 +578,19 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	private void renderGrid(GuiGraphics graphics) {
 		int originX = gridOriginX();
 		int originY = gridOriginY();
+		int left = PANEL_WIDTH;
+		int top = TOOLBAR_HEIGHT;
 		int right = width - 10;
 		int bottom = height - 10;
+		int firstX = originX + Math.floorDiv(left - originX, cellSize) * cellSize;
+		int firstY = originY + Math.floorDiv(top - originY, cellSize) * cellSize;
 
-		for (int x = originX; x < right; x += cellSize) {
-			graphics.vLine(x, originY, bottom, 0xff28313b);
+		for (int x = firstX; x < right; x += cellSize) {
+			graphics.vLine(x, top, bottom, 0xff28313b);
 		}
 
-		for (int y = originY; y < bottom; y += cellSize) {
-			graphics.hLine(originX, right, y, 0xff28313b);
+		for (int y = firstY; y < bottom; y += cellSize) {
+			graphics.hLine(left, right, y, 0xff28313b);
 		}
 	}
 
@@ -1844,7 +1848,11 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 
 		BlockPos origin = WorldPlacementState.origin();
 		if (origin == null) {
-			origin = WorldPlacementState.originOrSet(minecraft.player.blockPosition().offset(2, 0, 2));
+			origin = inferWorldOriginFromPlan();
+			if (origin == null) {
+				origin = minecraft.player.blockPosition().offset(2, 0, 2);
+			}
+			origin = WorldPlacementState.originOrSet(origin);
 		}
 		BlockPos scanOrigin = origin;
 
@@ -1929,6 +1937,100 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				+ " parts (" + componentCount + " components, " + dustCount + " dust, " + repeaterCount + " repeaters, " + observerCount + " observers, " + sourceCount + " sources, " + skippedComponentOverlap + " overlaps skipped)."), false);
 	}
 
+	private BlockPos inferWorldOriginFromPlan() {
+		if (minecraft == null || minecraft.level == null || minecraft.player == null || placedComponents.isEmpty()) {
+			return null;
+		}
+
+		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
+		Map<BlockPos, Integer> candidateScores = new LinkedHashMap<>();
+		BlockPos playerPos = minecraft.player.blockPosition();
+		Map<String, List<BlockPos>> worldAnchors = nearbyUsefulWorldAnchors(playerPos, 96);
+
+		for (PlacedComponent component : placedComponents) {
+			List<SchematicBlock> anchors = component.schematic().blocks().stream()
+					.filter(block -> isUsefulOriginAnchor(block.blockName()))
+					.limit(4)
+					.toList();
+			if (anchors.isEmpty()) {
+				continue;
+			}
+
+			for (SchematicBlock anchor : anchors) {
+				for (BlockPos worldPos : worldAnchors.getOrDefault(anchor.blockName(), List.of())) {
+					GridPoint rotated = rotatePoint(anchor.position().x(), anchor.position().z(), component.schematic().size().x(), component.schematic().size().z(), component.rotation());
+					int planeOffset = planeOffsets.getOrDefault(component.plane(), 0);
+					BlockPos candidateOrigin = worldPos.offset(
+							-(component.gridX() + rotated.x()),
+							-(planeOffset + anchor.position().y()),
+							-(component.gridZ() + rotated.z())
+					);
+					int score = scoreWorldOrigin(candidateOrigin, planeOffsets);
+					if (score > 0) {
+						candidateScores.merge(candidateOrigin, score, Math::max);
+					}
+				}
+			}
+		}
+
+		return candidateScores.entrySet().stream()
+				.filter(entry -> entry.getValue() >= 4)
+				.max(Map.Entry.comparingByValue())
+				.map(Map.Entry::getKey)
+				.orElse(null);
+	}
+
+	private Map<String, List<BlockPos>> nearbyUsefulWorldAnchors(BlockPos center, int radius) {
+		Map<String, List<BlockPos>> anchors = new LinkedHashMap<>();
+		for (int x = center.getX() - radius; x <= center.getX() + radius; x++) {
+			for (int y = center.getY() - 16; y <= center.getY() + 32; y++) {
+				for (int z = center.getZ() - radius; z <= center.getZ() + radius; z++) {
+					BlockPos pos = new BlockPos(x, y, z);
+					BlockState state = minecraft.level.getBlockState(pos);
+					String blockName = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+					if (isUsefulOriginAnchor(blockName)) {
+						anchors.computeIfAbsent(blockName, ignored -> new ArrayList<>()).add(pos);
+					}
+				}
+			}
+		}
+		return anchors;
+	}
+
+	private int scoreWorldOrigin(BlockPos origin, Map<Integer, Integer> planeOffsets) {
+		int score = 0;
+		int checked = 0;
+		for (PlacedComponent component : placedComponents) {
+			for (SchematicBlock block : component.schematic().blocks()) {
+				if (!isUsefulOriginAnchor(block.blockName())) {
+					continue;
+				}
+				GridPoint rotated = rotatePoint(block.position().x(), block.position().z(), component.schematic().size().x(), component.schematic().size().z(), component.rotation());
+				BlockPos worldPos = origin.offset(
+						component.gridX() + rotated.x(),
+						planeOffsets.getOrDefault(component.plane(), 0) + block.position().y(),
+						component.gridZ() + rotated.z()
+				);
+				if (worldBlockMatches(block, component.rotation(), minecraft.level.getBlockState(worldPos))) {
+					score++;
+				}
+				checked++;
+				if (checked >= 48) {
+					return score;
+				}
+			}
+		}
+		return score;
+	}
+
+	private static boolean isUsefulOriginAnchor(String blockName) {
+		return isWorldRedstoneComponentName(blockName)
+				|| blockName.equals("minecraft:yellow_concrete")
+				|| blockName.equals("minecraft:lime_concrete")
+				|| blockName.equals("minecraft:pink_concrete")
+				|| blockName.equals("minecraft:iron_block");
+	}
+
 	private List<ScannedRedstone> scanKnownCircuitComponents(ScanBounds bounds, BlockPos origin, Map<Integer, Integer> planeOffsets) {
 		List<ScannedRedstone> found = new ArrayList<>();
 		Set<BlockPos> occupied = new LinkedHashSet<>();
@@ -1936,15 +2038,19 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		int maxGridX = bounds.maxX() - origin.getX();
 		int minGridZ = bounds.minZ() - origin.getZ();
 		int maxGridZ = bounds.maxZ() - origin.getZ();
+		List<CircuitComponentType> componentTypes = CircuitComponentType.MENU_ORDER.stream()
+				.filter(SchaltplanEditorScreen::isKnownCircuitComponent)
+				.sorted((left, right) -> Integer.compare(
+						schematics.get(right) == null ? 0 : schematics.get(right).blocks().size(),
+						schematics.get(left) == null ? 0 : schematics.get(left).blocks().size()
+				))
+				.toList();
 
 		for (Map.Entry<Integer, Integer> planeEntry : planeOffsets.entrySet()) {
 			int plane = planeEntry.getKey();
-			for (CircuitComponentType type : CircuitComponentType.MENU_ORDER) {
-				if (!isKnownCircuitComponent(type)) {
-					continue;
-				}
+			for (CircuitComponentType type : componentTypes) {
 				LitematicSchematic schematic = schematics.get(type);
-				if (schematic == null || redstoneBlockCount(schematic) < 2) {
+				if (schematic == null) {
 					continue;
 				}
 				for (int rotation = 0; rotation < 4; rotation++) {
