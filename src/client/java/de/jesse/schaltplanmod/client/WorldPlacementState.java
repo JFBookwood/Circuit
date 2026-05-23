@@ -37,6 +37,10 @@ public final class WorldPlacementState {
 		return origin;
 	}
 
+	public static BlockPos origin() {
+		return origin;
+	}
+
 	public static void resetOrigin() {
 		origin = null;
 	}

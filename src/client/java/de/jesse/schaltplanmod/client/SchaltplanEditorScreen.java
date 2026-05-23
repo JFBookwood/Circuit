@@ -13,6 +13,9 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
@@ -149,6 +152,9 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		addRenderableWidget(Button.builder(Component.literal("Sync"), button -> {
 			syncToWorld();
 		}).bounds(width - 172, y, 54, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("Scan"), button -> {
+			scanWorldRedstoneChanges();
+		}).bounds(width - 232, y, 54, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("Clear"), button -> {
 			pushUndo();
 			clearEditorAndWorld();
@@ -1830,6 +1836,185 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		minecraft.player.displayClientMessage(Component.literal("Circuit synced: " + commandCount + " changed blocks (" + blocksToClear.size() + " cleared, " + blocksToPlace.size() + " placed)."), false);
 	}
 
+	private void scanWorldRedstoneChanges() {
+		if (minecraft == null || minecraft.player == null || minecraft.level == null) {
+			return;
+		}
+
+		BlockPos origin = WorldPlacementState.origin();
+		if (origin == null) {
+			origin = WorldPlacementState.originOrSet(minecraft.player.blockPosition().offset(2, 0, 2));
+		}
+		BlockPos scanOrigin = origin;
+
+		ScanBounds bounds = scanBounds(scanOrigin);
+		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
+		List<ScannedRedstone> scanned = new ArrayList<>();
+		for (int x = bounds.minX(); x <= bounds.maxX(); x++) {
+			for (int y = bounds.minY(); y <= bounds.maxY(); y++) {
+				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
+					BlockPos pos = new BlockPos(x, y, z);
+					BlockState state = minecraft.level.getBlockState(pos);
+					CircuitComponentType type = redstoneTypeFromWorldState(state);
+					if (type == null) {
+						continue;
+					}
+					LitematicSchematic schematic = schematics.get(type);
+					if (schematic == null) {
+						continue;
+					}
+					int rotation = rotationFromWorldState(state);
+					SchematicBlock anchor = anchorBlockFor(schematic, type);
+					GridPoint rotated = rotatePoint(anchor.position().x(), anchor.position().z(), schematic.size().x(), schematic.size().z(), rotation);
+					int plane = planeForWorldY(pos.getY() - origin.getY() - anchor.position().y(), planeOffsets);
+					int gridX = pos.getX() - scanOrigin.getX() - rotated.x();
+					int gridZ = pos.getZ() - scanOrigin.getZ() - rotated.z();
+					if (nonWireComponentAt(gridX, gridZ, plane)) {
+						continue;
+					}
+					scanned.add(new ScannedRedstone(type, gridX, gridZ, rotation, plane));
+				}
+			}
+		}
+
+		pushUndo();
+		placedComponents.removeIf(component -> isWirePart(component) && bounds.containsGrid(component.gridX(), component.gridZ(), scanOrigin));
+		addScannedRedstone(scanned);
+		refreshNextGroupId();
+		SchaltplanPlanStorage.saveCurrent(placedComponents);
+		minecraft.player.displayClientMessage(Component.literal("World scan imported " + scanned.size() + " redstone parts."), false);
+	}
+
+	private ScanBounds scanBounds(BlockPos origin) {
+		if (!WorldPlacementState.lastPlacedBlocks().isEmpty()) {
+			int minX = Integer.MAX_VALUE;
+			int minY = Integer.MAX_VALUE;
+			int minZ = Integer.MAX_VALUE;
+			int maxX = Integer.MIN_VALUE;
+			int maxY = Integer.MIN_VALUE;
+			int maxZ = Integer.MIN_VALUE;
+			for (BlockPos pos : WorldPlacementState.lastPlacedBlocks().keySet()) {
+				minX = Math.min(minX, pos.getX());
+				minY = Math.min(minY, pos.getY());
+				minZ = Math.min(minZ, pos.getZ());
+				maxX = Math.max(maxX, pos.getX());
+				maxY = Math.max(maxY, pos.getY());
+				maxZ = Math.max(maxZ, pos.getZ());
+			}
+			return new ScanBounds(minX - 8, minY - 4, minZ - 8, maxX + 8, maxY + 6, maxZ + 8);
+		}
+
+		if (!placedComponents.isEmpty()) {
+			Bounds bounds = boundsOf(placedComponents);
+			return new ScanBounds(
+					origin.getX() + bounds.minX() - 8,
+					origin.getY() - 4,
+					origin.getZ() + bounds.minZ() - 8,
+					origin.getX() + bounds.maxX() + 8,
+					origin.getY() + 32,
+					origin.getZ() + bounds.maxZ() + 8
+			);
+		}
+
+		BlockPos center = minecraft.player.blockPosition();
+		return new ScanBounds(center.getX() - 24, center.getY() - 8, center.getZ() - 24, center.getX() + 24, center.getY() + 16, center.getZ() + 24);
+	}
+
+	private void addScannedRedstone(List<ScannedRedstone> scanned) {
+		Map<GridPlanePoint, ScannedRedstone> wireCells = new LinkedHashMap<>();
+		for (ScannedRedstone redstone : scanned) {
+			if (redstone.type() == CircuitComponentType.REPEATER_DELAY) {
+				LitematicSchematic schematic = schematics.get(redstone.type());
+				placedComponents.add(new PlacedComponent(schematic, redstone.gridX(), redstone.gridZ(), redstone.rotation(), nextGroupId++, redstone.plane()));
+			} else {
+				wireCells.put(new GridPlanePoint(redstone.gridX(), redstone.gridZ(), redstone.plane()), redstone);
+			}
+		}
+
+		Set<GridPlanePoint> visited = new LinkedHashSet<>();
+		for (Map.Entry<GridPlanePoint, ScannedRedstone> entry : wireCells.entrySet()) {
+			if (!visited.add(entry.getKey())) {
+				continue;
+			}
+			long groupId = nextGroupId++;
+			List<GridPlanePoint> queue = new ArrayList<>();
+			queue.add(entry.getKey());
+			for (int cursor = 0; cursor < queue.size(); cursor++) {
+				GridPlanePoint point = queue.get(cursor);
+				ScannedRedstone redstone = wireCells.get(point);
+				LitematicSchematic schematic = schematics.get(redstone.type());
+				placedComponents.add(new PlacedComponent(schematic, redstone.gridX(), redstone.gridZ(), redstone.rotation(), groupId, redstone.plane()));
+				for (GridPlanePoint neighbor : point.neighbors()) {
+					ScannedRedstone neighborRedstone = wireCells.get(neighbor);
+					if (neighborRedstone != null && neighborRedstone.type() == redstone.type() && visited.add(neighbor)) {
+						queue.add(neighbor);
+					}
+				}
+			}
+		}
+	}
+
+	private CircuitComponentType redstoneTypeFromWorldState(BlockState state) {
+		if (state.is(Blocks.REDSTONE_WIRE)) {
+			return CircuitComponentType.WIRE;
+		}
+		if (state.is(Blocks.REPEATER)) {
+			return CircuitComponentType.REPEATER_DELAY;
+		}
+		if (state.is(Blocks.OBSERVER)) {
+			return CircuitComponentType.OBSERVER_WIRE;
+		}
+		return null;
+	}
+
+	private static int rotationFromWorldState(BlockState state) {
+		if (state.hasProperty(BlockStateProperties.FACING)) {
+			return rotationFromFacing(state.getValue(BlockStateProperties.FACING));
+		}
+		if (state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+			return rotationFromFacing(state.getValue(BlockStateProperties.HORIZONTAL_FACING));
+		}
+		return 0;
+	}
+
+	private static int rotationFromFacing(net.minecraft.core.Direction facing) {
+		return switch (facing) {
+			case SOUTH -> 1;
+			case WEST -> 2;
+			case NORTH -> 3;
+			default -> 0;
+		};
+	}
+
+	private static SchematicBlock anchorBlockFor(LitematicSchematic schematic, CircuitComponentType type) {
+		String blockName = switch (type) {
+			case REPEATER_DELAY -> "minecraft:repeater";
+			case OBSERVER_WIRE -> "minecraft:observer";
+			default -> "minecraft:redstone_wire";
+		};
+		return schematic.blocks().stream()
+				.filter(block -> block.blockName().equals(blockName))
+				.findFirst()
+				.orElseGet(() -> schematic.blocks().getFirst());
+	}
+
+	private static int planeForWorldY(int desiredOffset, Map<Integer, Integer> planeOffsets) {
+		return planeOffsets.entrySet().stream()
+				.min(Comparator.comparingInt(entry -> Math.abs(entry.getValue() - desiredOffset)))
+				.map(Map.Entry::getKey)
+				.orElse(0);
+	}
+
+	private boolean nonWireComponentAt(int gridX, int gridZ, int plane) {
+		GridPoint point = new GridPoint(gridX, gridZ);
+		for (PlacedComponent component : placedComponents) {
+			if (component.plane() == plane && !isWirePart(component) && occupiesGrid(component, point)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private Map<BlockPos, String> buildDesiredWorldBlocks(BlockPos origin) {
 		Map<BlockPos, String> desiredBlocks = new LinkedHashMap<>();
 		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
@@ -2118,5 +2303,27 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	}
 
 	private record PathNode(GridPoint point, int cost, int priority) {
+	}
+
+	private record ScannedRedstone(CircuitComponentType type, int gridX, int gridZ, int rotation, int plane) {
+	}
+
+	private record GridPlanePoint(int x, int z, int plane) {
+		private List<GridPlanePoint> neighbors() {
+			return List.of(
+					new GridPlanePoint(x + 1, z, plane),
+					new GridPlanePoint(x - 1, z, plane),
+					new GridPlanePoint(x, z + 1, plane),
+					new GridPlanePoint(x, z - 1, plane)
+			);
+		}
+	}
+
+	private record ScanBounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+		private boolean containsGrid(int gridX, int gridZ, BlockPos origin) {
+			int worldX = origin.getX() + gridX;
+			int worldZ = origin.getZ() + gridZ;
+			return worldX >= minX && worldX <= maxX && worldZ >= minZ && worldZ <= maxZ;
+		}
 	}
 }
