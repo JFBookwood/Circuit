@@ -16,6 +16,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.Property;
 import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
@@ -571,7 +572,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	}
 
 	private static boolean isPaletteType(CircuitComponentType type) {
-		return type.hasBundledSchematic();
+		return type.hasBundledSchematic() && type != CircuitComponentType.FOUR_BIT_CALCULATOR_MEMORY;
 	}
 
 	private void renderGrid(GuiGraphics graphics) {
@@ -1859,23 +1860,34 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
 					BlockPos pos = new BlockPos(x, y, z);
 					BlockState state = minecraft.level.getBlockState(pos);
+					if (!isWorldRedstoneComponent(state)) {
+						continue;
+					}
 					CircuitComponentType type = redstoneTypeFromWorldState(state);
-					if (type == null) {
-						continue;
-					}
-					LitematicSchematic schematic = schematics.get(type);
-					if (schematic == null) {
-						continue;
-					}
+					LitematicSchematic schematic;
 					int rotation = rotationFromWorldState(state);
-					GridPoint gridPoint = gridPointForScannedBlock(pos, scanOrigin, schematic, type, rotation);
-					int plane = planeForScannedBlock(pos, scanOrigin, schematic, type, planeOffsets);
-					int gridX = gridPoint.x();
-					int gridZ = gridPoint.z();
+					int plane;
+					int gridX;
+					int gridZ;
+					if (type == CircuitComponentType.CUSTOM_MODULE) {
+						schematic = scannedWorldComponentSchematic(state);
+						plane = planeAtOrBelowWorldY(pos.getY() - scanOrigin.getY(), planeOffsets);
+						gridX = pos.getX() - scanOrigin.getX();
+						gridZ = pos.getZ() - scanOrigin.getZ();
+					} else {
+						schematic = schematics.get(type);
+						if (schematic == null) {
+							continue;
+						}
+						GridPoint gridPoint = gridPointForScannedBlock(pos, scanOrigin, schematic, type, rotation);
+						plane = planeForScannedBlock(pos, scanOrigin, schematic, type, planeOffsets);
+						gridX = gridPoint.x();
+						gridZ = gridPoint.z();
+					}
 					if (nonWireComponentAt(gridX, gridZ, plane)) {
 						continue;
 					}
-					scanned.add(new ScannedRedstone(type, gridX, gridZ, rotation, plane));
+					scanned.add(new ScannedRedstone(type, gridX, gridZ, rotation, plane, schematic));
 					if (type == CircuitComponentType.WIRE) {
 						dustCount++;
 					} else if (type == CircuitComponentType.REPEATER_DELAY) {
@@ -1944,8 +1956,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			if (redstone.type() == CircuitComponentType.WIRE || redstone.type() == CircuitComponentType.OBSERVER_WIRE) {
 				wireCells.put(new GridPlanePoint(redstone.gridX(), redstone.gridZ(), redstone.plane()), redstone);
 			} else {
-				LitematicSchematic schematic = schematics.get(redstone.type());
-				placedComponents.add(new PlacedComponent(schematic, redstone.gridX(), redstone.gridZ(), redstone.rotation(), nextGroupId++, redstone.plane()));
+				placedComponents.add(new PlacedComponent(redstone.schematic(), redstone.gridX(), redstone.gridZ(), redstone.rotation(), nextGroupId++, redstone.plane()));
 			}
 		}
 
@@ -1960,8 +1971,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			for (int cursor = 0; cursor < queue.size(); cursor++) {
 				GridPlanePoint point = queue.get(cursor);
 				ScannedRedstone redstone = wireCells.get(point);
-				LitematicSchematic schematic = schematics.get(redstone.type());
-				placedComponents.add(new PlacedComponent(schematic, redstone.gridX(), redstone.gridZ(), redstone.rotation(), groupId, redstone.plane()));
+				placedComponents.add(new PlacedComponent(redstone.schematic(), redstone.gridX(), redstone.gridZ(), redstone.rotation(), groupId, redstone.plane()));
 				for (GridPlanePoint neighbor : point.neighbors()) {
 					ScannedRedstone neighborRedstone = wireCells.get(neighbor);
 					if (neighborRedstone != null && neighborRedstone.type() == redstone.type() && visited.add(neighbor)) {
@@ -1985,7 +1995,64 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		if (state.is(Blocks.REDSTONE_BLOCK) || state.getBlock() == Blocks.REDSTONE_BLOCK) {
 			return CircuitComponentType.VCC;
 		}
-		return null;
+		return CircuitComponentType.CUSTOM_MODULE;
+	}
+
+	private static boolean isWorldRedstoneComponent(BlockState state) {
+		return state.is(Blocks.REDSTONE_WIRE)
+				|| state.is(Blocks.REPEATER)
+				|| state.is(Blocks.COMPARATOR)
+				|| state.is(Blocks.OBSERVER)
+				|| state.is(Blocks.REDSTONE_BLOCK)
+				|| state.is(Blocks.REDSTONE_TORCH)
+				|| state.is(Blocks.REDSTONE_WALL_TORCH)
+				|| state.is(Blocks.LEVER)
+				|| state.is(Blocks.STONE_BUTTON)
+				|| state.is(Blocks.OAK_BUTTON)
+				|| state.is(Blocks.SPRUCE_BUTTON)
+				|| state.is(Blocks.BIRCH_BUTTON)
+				|| state.is(Blocks.JUNGLE_BUTTON)
+				|| state.is(Blocks.ACACIA_BUTTON)
+				|| state.is(Blocks.CHERRY_BUTTON)
+				|| state.is(Blocks.DARK_OAK_BUTTON)
+				|| state.is(Blocks.MANGROVE_BUTTON)
+				|| state.is(Blocks.BAMBOO_BUTTON)
+				|| state.is(Blocks.CRIMSON_BUTTON)
+				|| state.is(Blocks.WARPED_BUTTON)
+				|| state.is(Blocks.POLISHED_BLACKSTONE_BUTTON)
+				|| state.is(Blocks.TRIPWIRE_HOOK)
+				|| state.is(Blocks.TARGET)
+				|| state.is(Blocks.PISTON)
+				|| state.is(Blocks.STICKY_PISTON)
+				|| state.is(Blocks.PISTON_HEAD)
+				|| state.is(Blocks.DISPENSER)
+				|| state.is(Blocks.DROPPER)
+				|| state.is(Blocks.HOPPER)
+				|| state.is(Blocks.NOTE_BLOCK)
+				|| state.is(Blocks.TNT)
+				|| state.is(Blocks.REDSTONE_LAMP)
+				|| state.is(Blocks.DAYLIGHT_DETECTOR)
+				|| state.is(Blocks.SCULK_SENSOR)
+				|| state.is(Blocks.CALIBRATED_SCULK_SENSOR);
+	}
+
+	private static LitematicSchematic scannedWorldComponentSchematic(BlockState state) {
+		String blockName = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+		String displayName = "World " + blockName.substring(blockName.indexOf(':') + 1).replace('_', ' ');
+		SchematicBlock block = new SchematicBlock(new de.jesse.schaltplanmod.circuit.SchematicPoint(0, 0, 0), blockName, propertiesFromState(state));
+		return new LitematicSchematic(CircuitComponentType.CUSTOM_MODULE, blockName, new de.jesse.schaltplanmod.circuit.LitematicSize(1, 1, 1), List.of(block), List.of(), displayName);
+	}
+
+	private static Map<String, String> propertiesFromState(BlockState state) {
+		Map<String, String> properties = new LinkedHashMap<>();
+		for (Property<?> property : state.getProperties()) {
+			properties.put(property.getName(), propertyValueName(state, property));
+		}
+		return Map.copyOf(properties);
+	}
+
+	private static <T extends Comparable<T>> String propertyValueName(BlockState state, Property<T> property) {
+		return property.getName(state.getValue(property));
 	}
 
 	private static GridPoint gridPointForScannedBlock(BlockPos pos, BlockPos origin, LitematicSchematic schematic, CircuitComponentType type, int rotation) {
@@ -2367,7 +2434,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	private record PathNode(GridPoint point, int cost, int priority) {
 	}
 
-	private record ScannedRedstone(CircuitComponentType type, int gridX, int gridZ, int rotation, int plane) {
+	private record ScannedRedstone(CircuitComponentType type, int gridX, int gridZ, int rotation, int plane, LitematicSchematic schematic) {
 	}
 
 	private record GridPlanePoint(int x, int z, int plane) {

@@ -65,6 +65,9 @@ public class PlanImportScreen extends Screen {
 		if (parent != null && parent.endsWith("modules")) {
 			return "module/" + file.getFileName();
 		}
+		if (parent != null && parent.endsWith("presets")) {
+			return "preset/" + file.getFileName();
+		}
 		return file.getFileName().toString();
 	}
 }

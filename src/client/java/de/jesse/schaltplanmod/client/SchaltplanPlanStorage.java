@@ -34,6 +34,7 @@ public final class SchaltplanPlanStorage {
 			.resolve("default" + PLAN_EXTENSION);
 	private static final Path LAST_PLAN_FILE = PLAN_FILE.getParent().resolve("last_plan.txt");
 	private static final Path MODULE_FOLDER = PLAN_FILE.getParent().resolve("modules");
+	private static final Path PRESET_FOLDER = PLAN_FILE.getParent().resolve("presets");
 	private static final DateTimeFormatter MODULE_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
 	private SchaltplanPlanStorage() {
@@ -89,8 +90,10 @@ public final class SchaltplanPlanStorage {
 	}
 
 	public static List<Path> listPlanFiles() {
+		ensureBundledPresets();
 		List<Path> files = new ArrayList<>();
 		collectPlanFiles(PLAN_FILE.getParent(), files);
+		collectPlanFiles(PRESET_FOLDER, files);
 		collectPlanFiles(MODULE_FOLDER, files);
 		files.sort(Comparator.comparing(path -> path.getFileName().toString()));
 		return files;
@@ -168,6 +171,10 @@ public final class SchaltplanPlanStorage {
 		return MODULE_FOLDER;
 	}
 
+	public static Path presetFolder() {
+		return PRESET_FOLDER;
+	}
+
 	public static boolean deletePlanFile(Path file) {
 		try {
 			if (!isDeletablePlanFile(file)) {
@@ -242,6 +249,23 @@ public final class SchaltplanPlanStorage {
 					.forEach(files::add);
 		} catch (IOException exception) {
 			SchaltplanMod.LOGGER.warn("Could not read plan folder: {}", folder, exception);
+		}
+	}
+
+	private static void ensureBundledPresets() {
+		Path calculator = PRESET_FOLDER.resolve("4bit_calculator_memory" + PLAN_EXTENSION);
+		if (Files.exists(calculator)) {
+			return;
+		}
+
+		try {
+			Files.createDirectories(PRESET_FOLDER);
+			Files.write(calculator, List.of(
+					"# Circuit preset v1",
+					CircuitComponentType.FOUR_BIT_CALCULATOR_MEMORY.name() + " 0 0 0 0 0"
+			));
+		} catch (IOException exception) {
+			SchaltplanMod.LOGGER.warn("Could not create bundled presets.", exception);
 		}
 	}
 
