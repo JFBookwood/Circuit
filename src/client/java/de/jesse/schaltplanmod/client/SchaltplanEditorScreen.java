@@ -1850,6 +1850,9 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		ScanBounds bounds = scanBounds(scanOrigin);
 		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
 		List<ScannedRedstone> scanned = new ArrayList<>();
+		int dustCount = 0;
+		int repeaterCount = 0;
+		int observerCount = 0;
 		for (int x = bounds.minX(); x <= bounds.maxX(); x++) {
 			for (int y = bounds.minY(); y <= bounds.maxY(); y++) {
 				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
@@ -1864,17 +1867,28 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 						continue;
 					}
 					int rotation = rotationFromWorldState(state);
-					SchematicBlock anchor = anchorBlockFor(schematic, type);
-					GridPoint rotated = rotatePoint(anchor.position().x(), anchor.position().z(), schematic.size().x(), schematic.size().z(), rotation);
-					int plane = planeForWorldY(pos.getY() - origin.getY() - anchor.position().y(), planeOffsets);
-					int gridX = pos.getX() - scanOrigin.getX() - rotated.x();
-					int gridZ = pos.getZ() - scanOrigin.getZ() - rotated.z();
+					GridPoint gridPoint = gridPointForScannedBlock(pos, scanOrigin, schematic, type, rotation);
+					int plane = planeForScannedBlock(pos, scanOrigin, schematic, type, planeOffsets);
+					int gridX = gridPoint.x();
+					int gridZ = gridPoint.z();
 					if (nonWireComponentAt(gridX, gridZ, plane)) {
 						continue;
 					}
 					scanned.add(new ScannedRedstone(type, gridX, gridZ, rotation, plane));
+					if (type == CircuitComponentType.WIRE) {
+						dustCount++;
+					} else if (type == CircuitComponentType.REPEATER_DELAY) {
+						repeaterCount++;
+					} else if (type == CircuitComponentType.OBSERVER_WIRE) {
+						observerCount++;
+					}
 				}
 			}
+		}
+
+		if (scanned.isEmpty()) {
+			minecraft.player.displayClientMessage(Component.literal("World scan found no redstone in the Circuit area. Existing editor wires were kept."), false);
+			return;
 		}
 
 		pushUndo();
@@ -1882,7 +1896,8 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		addScannedRedstone(scanned);
 		refreshNextGroupId();
 		SchaltplanPlanStorage.saveCurrent(placedComponents);
-		minecraft.player.displayClientMessage(Component.literal("World scan imported " + scanned.size() + " redstone parts."), false);
+		minecraft.player.displayClientMessage(Component.literal("World scan imported " + scanned.size()
+				+ " redstone parts (" + dustCount + " dust, " + repeaterCount + " repeaters, " + observerCount + " observers)."), false);
 	}
 
 	private ScanBounds scanBounds(BlockPos origin) {
@@ -1955,16 +1970,45 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	}
 
 	private CircuitComponentType redstoneTypeFromWorldState(BlockState state) {
-		if (state.is(Blocks.REDSTONE_WIRE)) {
+		if (state.is(Blocks.REDSTONE_WIRE) || state.getBlock() == Blocks.REDSTONE_WIRE) {
 			return CircuitComponentType.WIRE;
 		}
-		if (state.is(Blocks.REPEATER)) {
+		if (state.is(Blocks.REPEATER) || state.getBlock() == Blocks.REPEATER) {
 			return CircuitComponentType.REPEATER_DELAY;
 		}
-		if (state.is(Blocks.OBSERVER)) {
+		if (state.is(Blocks.OBSERVER) || state.getBlock() == Blocks.OBSERVER) {
 			return CircuitComponentType.OBSERVER_WIRE;
 		}
 		return null;
+	}
+
+	private static GridPoint gridPointForScannedBlock(BlockPos pos, BlockPos origin, LitematicSchematic schematic, CircuitComponentType type, int rotation) {
+		if (type == CircuitComponentType.WIRE) {
+			return new GridPoint(pos.getX() - origin.getX(), pos.getZ() - origin.getZ());
+		}
+
+		SchematicBlock anchor = anchorBlockFor(schematic, type);
+		GridPoint rotated = rotatePoint(anchor.position().x(), anchor.position().z(), schematic.size().x(), schematic.size().z(), rotation);
+		return new GridPoint(pos.getX() - origin.getX() - rotated.x(), pos.getZ() - origin.getZ() - rotated.z());
+	}
+
+	private int planeForScannedBlock(BlockPos pos, BlockPos origin, LitematicSchematic schematic, CircuitComponentType type, Map<Integer, Integer> planeOffsets) {
+		if (type == CircuitComponentType.WIRE) {
+			int desiredOffset = pos.getY() - origin.getY() - redstoneWireAnchorY(schematic);
+			int nearestPlane = planeForWorldY(desiredOffset, planeOffsets);
+			return Math.abs(planeOffsets.getOrDefault(nearestPlane, 0) - desiredOffset) <= 1 ? nearestPlane : activePlane;
+		}
+
+		SchematicBlock anchor = anchorBlockFor(schematic, type);
+		return planeForWorldY(pos.getY() - origin.getY() - anchor.position().y(), planeOffsets);
+	}
+
+	private static int redstoneWireAnchorY(LitematicSchematic schematic) {
+		return schematic.blocks().stream()
+				.filter(block -> block.blockName().equals("minecraft:redstone_wire"))
+				.mapToInt(block -> block.position().y())
+				.min()
+				.orElse(0);
 	}
 
 	private static int rotationFromWorldState(BlockState state) {
