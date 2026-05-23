@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -631,7 +632,10 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			graphics.drawCenteredString(font, label, x + w / 2, y + Math.max(5, h / 2 - 4), 0xffffffff);
 		}
 		if (!ghost && schematic.type() == CircuitComponentType.REPEATER_DELAY) {
-			renderRepeaterDirection(graphics, x, y, w, h, placed.rotation());
+			renderDirectionArrow(graphics, x, y, w, h, placed.rotation(), 0xffffffff);
+		}
+		if (!ghost && schematic.type() == CircuitComponentType.OBSERVER_WIRE) {
+			renderDirectionArrow(graphics, x, y, w, h, placed.rotation(), 0xff7ee8ff);
 		}
 
 		for (SchematicPort port : schematic.ports()) {
@@ -678,15 +682,19 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		if (!ghost && placed.schematic().type() == CircuitComponentType.REPEATER_DELAY) {
 			int w = Math.max(cellSize, rotatedSizeX(placed) * cellSize);
 			int h = Math.max(cellSize, rotatedSizeZ(placed) * cellSize);
-			renderRepeaterDirection(graphics, baseX, baseY, w, h, placed.rotation());
+			renderDirectionArrow(graphics, baseX, baseY, w, h, placed.rotation(), 0xffffffff);
+		}
+		if (!ghost && placed.schematic().type() == CircuitComponentType.OBSERVER_WIRE) {
+			int w = Math.max(cellSize, rotatedSizeX(placed) * cellSize);
+			int h = Math.max(cellSize, rotatedSizeZ(placed) * cellSize);
+			renderDirectionArrow(graphics, baseX, baseY, w, h, placed.rotation(), 0xff7ee8ff);
 		}
 	}
 
-	private void renderRepeaterDirection(GuiGraphics graphics, int x, int y, int w, int h, int rotation) {
+	private void renderDirectionArrow(GuiGraphics graphics, int x, int y, int w, int h, int rotation, int color) {
 		int cx = x + w / 2;
 		int cy = y + h / 2;
 		int length = Math.max(5, Math.min(w, h) / 2 - 2);
-		int color = 0xffffffff;
 		switch (Math.floorMod(rotation, 4)) {
 			case 1 -> {
 				graphics.vLine(cx, cy - length, cy + length, color);
@@ -864,16 +872,56 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 
 		List<GridPoint> path = wirePathForTool(effectiveWireType, startX, startZ, endX, endZ);
+		List<RoutedPoint> routedPath = routeWithBridges(effectiveWireType, path);
 		long groupId = nextGroupId++;
 		int wireRotation = wireRotation(effectiveWireType, startX, startZ, endX, endZ);
-		for (int index = 0; index < path.size(); index++) {
-			GridPoint point = path.get(index);
+		for (int index = 0; index < routedPath.size(); index++) {
+			RoutedPoint routedPoint = routedPath.get(index);
+			GridPoint point = routedPoint.point();
+			int plane = routedPoint.plane();
 			if (effectiveWireType == CircuitComponentType.WIRE && shouldPlaceRepeater(path, index)) {
-				addRepeaterIfMissing(point.x(), point.z(), groupId, repeaterRotation(path, index));
+				addRepeaterIfMissing(point.x(), point.z(), groupId, repeaterRotation(path, index), plane);
 			} else {
-				addWireIfMissing(effectiveWireType, wire, point.x(), point.z(), groupId, wireRotation);
+				addWireIfMissing(effectiveWireType, wire, point.x(), point.z(), groupId, wireRotation, plane);
 			}
 		}
+	}
+
+	private List<RoutedPoint> routeWithBridges(CircuitComponentType wireType, List<GridPoint> path) {
+		Set<Integer> elevatedIndexes = new LinkedHashSet<>();
+		if (wireType == CircuitComponentType.WIRE) {
+			for (int index = 0; index < path.size(); index++) {
+				if (shouldElevateWirePoint(path.get(index))) {
+					elevatedIndexes.add(index);
+					if (index > 0) {
+						elevatedIndexes.add(index - 1);
+					}
+					if (index + 1 < path.size()) {
+						elevatedIndexes.add(index + 1);
+					}
+				}
+			}
+		}
+
+		List<RoutedPoint> routed = new ArrayList<>();
+		for (int index = 0; index < path.size(); index++) {
+			int plane = elevatedIndexes.contains(index) ? activePlane + 1 : activePlane;
+			routed.add(new RoutedPoint(path.get(index), plane));
+		}
+		return routed;
+	}
+
+	private boolean shouldElevateWirePoint(GridPoint point) {
+		for (PlacedComponent component : placedComponents) {
+			if (component.plane() != activePlane || !isWirePart(component)) {
+				continue;
+			}
+			int distance = Math.abs(component.gridX() - point.x()) + Math.abs(component.gridZ() - point.z());
+			if (distance <= 1) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static int repeaterRotation(List<GridPoint> path, int index) {
@@ -901,41 +949,15 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		return deltaZ < 0 ? 3 : 1;
 	}
 
-	private static List<GridPoint> wirePath(int startX, int startZ, int endX, int endZ) {
-		List<GridPoint> points = new ArrayList<>();
-		int deltaX = Math.abs(endX - startX);
-		int deltaZ = Math.abs(endZ - startZ);
-		int stepX = startX < endX ? 1 : -1;
-		int stepZ = startZ < endZ ? 1 : -1;
-		int error = deltaX - deltaZ;
-		int x = startX;
-		int z = startZ;
-
-		while (true) {
-			points.add(new GridPoint(x, z));
-
-			if (x == endX && z == endZ) {
-				return points;
-			}
-
-			int previousX = x;
-			int previousZ = z;
-			int doubledError = 2 * error;
-			if (doubledError > -deltaZ) {
-				error -= deltaZ;
-				x += stepX;
-			}
-			if (doubledError < deltaX) {
-				error += deltaX;
-				z += stepZ;
-			}
-			if (previousX != x && previousZ != z) {
-				points.add(new GridPoint(x, previousZ));
-			}
+	private List<GridPoint> wirePath(int startX, int startZ, int endX, int endZ) {
+		List<GridPoint> routed = routedOrthogonalPath(new GridPoint(startX, startZ), new GridPoint(endX, endZ));
+		if (!routed.isEmpty()) {
+			return routed;
 		}
+		return elbowPath(startX, startZ, endX, endZ);
 	}
 
-	private static List<GridPoint> wirePathForTool(CircuitComponentType wireType, int startX, int startZ, int endX, int endZ) {
+	private List<GridPoint> wirePathForTool(CircuitComponentType wireType, int startX, int startZ, int endX, int endZ) {
 		if (wireType != CircuitComponentType.OBSERVER_WIRE) {
 			return wirePath(startX, startZ, endX, endZ);
 		}
@@ -945,6 +967,116 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 
 		return straightWirePath(startX, startZ, startX, endZ);
+	}
+
+	private List<GridPoint> routedOrthogonalPath(GridPoint start, GridPoint end) {
+		int directDistance = manhattan(start, end);
+		int margin = Math.max(8, Math.min(32, directDistance / 2 + 6));
+		int minX = Math.min(start.x(), end.x()) - margin;
+		int maxX = Math.max(start.x(), end.x()) + margin;
+		int minZ = Math.min(start.z(), end.z()) - margin;
+		int maxZ = Math.max(start.z(), end.z()) + margin;
+
+		PriorityQueue<PathNode> open = new PriorityQueue<>((left, right) -> Integer.compare(left.priority(), right.priority()));
+		Map<GridPoint, Integer> bestCost = new HashMap<>();
+		Map<GridPoint, GridPoint> previous = new HashMap<>();
+		open.add(new PathNode(start, 0, manhattan(start, end)));
+		bestCost.put(start, 0);
+
+		while (!open.isEmpty()) {
+			PathNode current = open.poll();
+			if (current.cost() != bestCost.getOrDefault(current.point(), Integer.MAX_VALUE)) {
+				continue;
+			}
+			if (current.point().equals(end)) {
+				return reconstructPath(previous, end);
+			}
+
+			for (GridPoint neighbor : neighbors(current.point())) {
+				if (neighbor.x() < minX || neighbor.x() > maxX || neighbor.z() < minZ || neighbor.z() > maxZ) {
+					continue;
+				}
+				int stepCost = routeCost(neighbor, start, end);
+				if (stepCost >= 10_000) {
+					continue;
+				}
+				int newCost = current.cost() + stepCost;
+				if (newCost < bestCost.getOrDefault(neighbor, Integer.MAX_VALUE)) {
+					bestCost.put(neighbor, newCost);
+					previous.put(neighbor, current.point());
+					open.add(new PathNode(neighbor, newCost, newCost + manhattan(neighbor, end)));
+				}
+			}
+		}
+		return List.of();
+	}
+
+	private int routeCost(GridPoint point, GridPoint start, GridPoint end) {
+		if (point.equals(start) || point.equals(end)) {
+			return 1;
+		}
+
+		int cost = 10;
+		for (PlacedComponent component : placedComponents) {
+			if (component.plane() != activePlane) {
+				continue;
+			}
+
+			boolean overlaps = occupiesGrid(component, point);
+			if (overlaps && !isWirePart(component)) {
+				return 10_000;
+			}
+			if (overlaps) {
+				cost += 35;
+			}
+			if (isWirePart(component) && manhattan(point, new GridPoint(component.gridX(), component.gridZ())) == 1) {
+				cost += 18;
+			}
+			if (!isWirePart(component) && nearComponentBounds(component, point)) {
+				cost += 12;
+			}
+		}
+		return cost;
+	}
+
+	private static List<GridPoint> reconstructPath(Map<GridPoint, GridPoint> previous, GridPoint end) {
+		ArrayList<GridPoint> path = new ArrayList<>();
+		GridPoint current = end;
+		path.add(current);
+		while (previous.containsKey(current)) {
+			current = previous.get(current);
+			path.add(0, current);
+		}
+		return path;
+	}
+
+	private static List<GridPoint> neighbors(GridPoint point) {
+		return List.of(
+				new GridPoint(point.x() + 1, point.z()),
+				new GridPoint(point.x() - 1, point.z()),
+				new GridPoint(point.x(), point.z() + 1),
+				new GridPoint(point.x(), point.z() - 1)
+		);
+	}
+
+	private static int manhattan(GridPoint a, GridPoint b) {
+		return Math.abs(a.x() - b.x()) + Math.abs(a.z() - b.z());
+	}
+
+	private static List<GridPoint> elbowPath(int startX, int startZ, int endX, int endZ) {
+		List<GridPoint> points = new ArrayList<>();
+		int x = startX;
+		int z = startZ;
+		points.add(new GridPoint(x, z));
+		while (x != endX) {
+			x += Integer.compare(endX, x);
+			points.add(new GridPoint(x, z));
+		}
+		while (z != endZ) {
+			z += Integer.compare(endZ, z);
+			points.add(new GridPoint(x, z));
+		}
+		return points;
 	}
 
 	private static List<GridPoint> straightWirePath(int startX, int startZ, int endX, int endZ) {
@@ -964,29 +1096,29 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 	}
 
-	private void addWireIfMissing(CircuitComponentType wireType, LitematicSchematic wire, int gridX, int gridZ, long groupId, int rotation) {
+	private void addWireIfMissing(CircuitComponentType wireType, LitematicSchematic wire, int gridX, int gridZ, long groupId, int rotation, int plane) {
 		boolean exists = placedComponents.stream()
 				.anyMatch(component -> component.schematic().type() == wireType
 						&& component.gridX() == gridX
 						&& component.gridZ() == gridZ
-						&& component.plane() == activePlane);
+						&& component.plane() == plane);
 
 		if (!exists) {
-			placedComponents.add(new PlacedComponent(wire, gridX, gridZ, rotation, groupId, activePlane));
+			placedComponents.add(new PlacedComponent(wire, gridX, gridZ, rotation, groupId, plane));
 		}
 	}
 
-	private void addRepeaterIfMissing(int gridX, int gridZ, long groupId, int rotation) {
+	private void addRepeaterIfMissing(int gridX, int gridZ, long groupId, int rotation, int plane) {
 		LitematicSchematic repeater = schematics.get(CircuitComponentType.REPEATER_DELAY);
 		if (repeater == null) {
 			return;
 		}
 
 		boolean exists = placedComponents.stream()
-				.anyMatch(component -> component.gridX() == gridX && component.gridZ() == gridZ && component.plane() == activePlane);
+				.anyMatch(component -> component.gridX() == gridX && component.gridZ() == gridZ && component.plane() == plane);
 
 		if (!exists) {
-			placedComponents.add(new PlacedComponent(repeater, gridX, gridZ, rotation, groupId, activePlane));
+			placedComponents.add(new PlacedComponent(repeater, gridX, gridZ, rotation, groupId, plane));
 		}
 	}
 
@@ -1619,6 +1751,20 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		return mouseY > TOOLBAR_HEIGHT && mouseX > PANEL_WIDTH && mouseX < width - INSPECTOR_WIDTH;
 	}
 
+	private static boolean occupiesGrid(PlacedComponent component, GridPoint point) {
+		return point.x() >= component.gridX()
+				&& point.x() < component.gridX() + rotatedSizeX(component)
+				&& point.z() >= component.gridZ()
+				&& point.z() < component.gridZ() + rotatedSizeZ(component);
+	}
+
+	private static boolean nearComponentBounds(PlacedComponent component, GridPoint point) {
+		return point.x() >= component.gridX() - 1
+				&& point.x() <= component.gridX() + rotatedSizeX(component)
+				&& point.z() >= component.gridZ() - 1
+				&& point.z() <= component.gridZ() + rotatedSizeZ(component);
+	}
+
 	private int screenToGridX(int mouseX) {
 		return Math.floorDiv(mouseX - gridOriginX(), cellSize);
 	}
@@ -1963,5 +2109,11 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	}
 
 	private record GridPoint(int x, int z) {
+	}
+
+	private record RoutedPoint(GridPoint point, int plane) {
+	}
+
+	private record PathNode(GridPoint point, int cost, int priority) {
 	}
 }
