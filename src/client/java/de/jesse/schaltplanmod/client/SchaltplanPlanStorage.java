@@ -58,6 +58,11 @@ public final class SchaltplanPlanStorage {
 		return saveAs(planFileForName(name), components);
 	}
 
+	public static boolean saveCurrent(List<PlacedComponent> components) {
+		Path last = lastPlanFile();
+		return saveAs(last == null ? PLAN_FILE : last, components);
+	}
+
 	private static boolean saveAs(Path file, List<PlacedComponent> components) {
 		List<String> lines = new ArrayList<>();
 		lines.add("# Circuit plan v1");

@@ -1356,8 +1356,11 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 
 		int clearedBlocks = clearPreviouslySyncedWorldBlocks(previousBlocks);
 		WorldPlacementState.clearPlacedBlocks();
+		boolean savedEmptyPlan = SchaltplanPlanStorage.saveCurrent(placedComponents);
 		if (minecraft != null && minecraft.player != null) {
-			minecraft.player.displayClientMessage(Component.literal("Circuit cleared" + (clearedBlocks > 0 ? ": " + clearedBlocks + " world blocks removed." : ".")), false);
+			minecraft.player.displayClientMessage(Component.literal("Circuit cleared"
+					+ (clearedBlocks > 0 ? ": " + clearedBlocks + " world blocks removed." : ".")
+					+ (savedEmptyPlan ? "" : " Could not update saved plan.")), false);
 		}
 	}
 
