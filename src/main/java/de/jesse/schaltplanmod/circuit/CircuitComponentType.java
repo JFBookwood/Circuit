@@ -27,6 +27,7 @@ public enum CircuitComponentType {
 	SWITCH("Switch", "switch.litematic", CircuitComponentCategory.IO),
 	VCC("VCC Constant Source", "vcc_permanent_source.litematic", CircuitComponentCategory.IO),
 	LAMP("Lamp", "lamp.litematic", CircuitComponentCategory.IO),
+	FOUR_BIT_CALCULATOR_MEMORY("4-bit Calculator + Memory", "4bit_calculator.litematic", CircuitComponentCategory.MODULES),
 	CUSTOM_MODULE("Custom Module", "", CircuitComponentCategory.MODULES);
 
 	public static final List<CircuitComponentType> MENU_ORDER = Arrays.asList(values());
