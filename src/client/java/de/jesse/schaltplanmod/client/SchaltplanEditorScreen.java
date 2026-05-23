@@ -1851,16 +1851,23 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		ScanBounds bounds = scanBounds(scanOrigin);
 		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
 		List<ScannedRedstone> scanned = new ArrayList<>();
+		List<ScannedRedstone> recognizedComponents = scanKnownCircuitComponents(bounds, scanOrigin, planeOffsets);
+		Set<BlockPos> recognizedComponentBlocks = recognizedComponentBlocks(recognizedComponents, scanOrigin, planeOffsets);
+		scanned.addAll(recognizedComponents);
 		int dustCount = 0;
 		int repeaterCount = 0;
 		int observerCount = 0;
 		int sourceCount = 0;
 		int rawDustCount = 0;
 		int skippedComponentOverlap = 0;
+		int componentCount = recognizedComponents.size();
 		for (int x = bounds.minX(); x <= bounds.maxX(); x++) {
 			for (int y = bounds.minY(); y <= bounds.maxY(); y++) {
 				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
 					BlockPos pos = new BlockPos(x, y, z);
+					if (recognizedComponentBlocks.contains(pos)) {
+						continue;
+					}
 					BlockState state = minecraft.level.getBlockState(pos);
 					if (state.is(Blocks.REDSTONE_WIRE) || state.getBlock() == Blocks.REDSTONE_WIRE) {
 						rawDustCount++;
@@ -1913,12 +1920,135 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 
 		pushUndo();
-		placedComponents.removeIf(component -> isWorldScannablePart(component) && bounds.containsGrid(component.gridX(), component.gridZ(), scanOrigin));
+		placedComponents.removeIf(component -> bounds.containsGrid(component.gridX(), component.gridZ(), scanOrigin)
+				&& (isWorldScannablePart(component) || isKnownCircuitComponent(component.schematic().type())));
 		addScannedRedstone(scanned);
 		refreshNextGroupId();
 		SchaltplanPlanStorage.saveCurrent(placedComponents);
 		minecraft.player.displayClientMessage(Component.literal("World scan imported " + scanned.size()
-				+ " redstone parts (" + dustCount + " dust, " + repeaterCount + " repeaters, " + observerCount + " observers, " + sourceCount + " sources, " + skippedComponentOverlap + " overlaps skipped)."), false);
+				+ " parts (" + componentCount + " components, " + dustCount + " dust, " + repeaterCount + " repeaters, " + observerCount + " observers, " + sourceCount + " sources, " + skippedComponentOverlap + " overlaps skipped)."), false);
+	}
+
+	private List<ScannedRedstone> scanKnownCircuitComponents(ScanBounds bounds, BlockPos origin, Map<Integer, Integer> planeOffsets) {
+		List<ScannedRedstone> found = new ArrayList<>();
+		Set<BlockPos> occupied = new LinkedHashSet<>();
+		int minGridX = bounds.minX() - origin.getX();
+		int maxGridX = bounds.maxX() - origin.getX();
+		int minGridZ = bounds.minZ() - origin.getZ();
+		int maxGridZ = bounds.maxZ() - origin.getZ();
+
+		for (Map.Entry<Integer, Integer> planeEntry : planeOffsets.entrySet()) {
+			int plane = planeEntry.getKey();
+			for (CircuitComponentType type : CircuitComponentType.MENU_ORDER) {
+				if (!isKnownCircuitComponent(type)) {
+					continue;
+				}
+				LitematicSchematic schematic = schematics.get(type);
+				if (schematic == null || redstoneBlockCount(schematic) < 2) {
+					continue;
+				}
+				for (int rotation = 0; rotation < 4; rotation++) {
+					int sizeX = rotation % 2 == 0 ? schematic.size().x() : schematic.size().z();
+					int sizeZ = rotation % 2 == 0 ? schematic.size().z() : schematic.size().x();
+					for (int gridX = minGridX - sizeX; gridX <= maxGridX; gridX++) {
+						for (int gridZ = minGridZ - sizeZ; gridZ <= maxGridZ; gridZ++) {
+							if (matchesKnownCircuitComponent(schematic, gridX, gridZ, rotation, planeEntry.getValue(), origin, occupied)) {
+								ScannedRedstone component = new ScannedRedstone(type, gridX, gridZ, rotation, plane, schematic);
+								found.add(component);
+								occupied.addAll(worldBlocksFor(component, origin, planeOffsets));
+							}
+						}
+					}
+				}
+			}
+		}
+		return found;
+	}
+
+	private boolean matchesKnownCircuitComponent(LitematicSchematic schematic, int gridX, int gridZ, int rotation, int planeYOffset, BlockPos origin, Set<BlockPos> occupied) {
+		int matchedRedstoneBlocks = 0;
+		for (SchematicBlock block : schematic.blocks()) {
+			GridPoint rotated = rotatePoint(block.position().x(), block.position().z(), schematic.size().x(), schematic.size().z(), rotation);
+			BlockPos worldPos = origin.offset(gridX + rotated.x(), planeYOffset + block.position().y(), gridZ + rotated.z());
+			if (occupied.contains(worldPos)) {
+				return false;
+			}
+			if (!worldBlockMatches(block, rotation, minecraft.level.getBlockState(worldPos))) {
+				return false;
+			}
+			if (isWorldRedstoneComponentName(block.blockName())) {
+				matchedRedstoneBlocks++;
+			}
+		}
+		return matchedRedstoneBlocks >= 2;
+	}
+
+	private static boolean worldBlockMatches(SchematicBlock expected, int rotation, BlockState actual) {
+		String actualName = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(actual.getBlock()).toString();
+		if (!expected.blockName().equals(actualName)) {
+			return false;
+		}
+		if ("minecraft:redstone_wire".equals(expected.blockName())) {
+			return true;
+		}
+		if (expected.properties().containsKey("facing")) {
+			return actual.hasProperty(BlockStateProperties.FACING)
+					&& rotateFacing(expected.properties().get("facing"), rotation).equals(actual.getValue(BlockStateProperties.FACING).getName());
+		}
+		return true;
+	}
+
+	private Set<BlockPos> recognizedComponentBlocks(List<ScannedRedstone> components, BlockPos origin, Map<Integer, Integer> planeOffsets) {
+		Set<BlockPos> blocks = new LinkedHashSet<>();
+		for (ScannedRedstone component : components) {
+			blocks.addAll(worldBlocksFor(component, origin, planeOffsets));
+		}
+		return blocks;
+	}
+
+	private static Set<BlockPos> worldBlocksFor(ScannedRedstone component, BlockPos origin, Map<Integer, Integer> planeOffsets) {
+		Set<BlockPos> blocks = new LinkedHashSet<>();
+		int planeYOffset = planeOffsets.getOrDefault(component.plane(), 0);
+		for (SchematicBlock block : component.schematic().blocks()) {
+			GridPoint rotated = rotatePoint(block.position().x(), block.position().z(), component.schematic().size().x(), component.schematic().size().z(), component.rotation());
+			blocks.add(origin.offset(component.gridX() + rotated.x(), planeYOffset + block.position().y(), component.gridZ() + rotated.z()));
+		}
+		return blocks;
+	}
+
+	private static boolean isKnownCircuitComponent(CircuitComponentType type) {
+		return type.hasBundledSchematic()
+				&& type != CircuitComponentType.WIRE
+				&& type != CircuitComponentType.OBSERVER_WIRE
+				&& type != CircuitComponentType.REPEATER_DELAY
+				&& type != CircuitComponentType.FOUR_BIT_CALCULATOR_MEMORY;
+	}
+
+	private static int redstoneBlockCount(LitematicSchematic schematic) {
+		int count = 0;
+		for (SchematicBlock block : schematic.blocks()) {
+			if (isWorldRedstoneComponentName(block.blockName())) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	private static boolean isWorldRedstoneComponentName(String blockName) {
+		return blockName.equals("minecraft:redstone_wire")
+				|| blockName.equals("minecraft:repeater")
+				|| blockName.equals("minecraft:comparator")
+				|| blockName.equals("minecraft:observer")
+				|| blockName.equals("minecraft:redstone_block")
+				|| blockName.equals("minecraft:redstone_torch")
+				|| blockName.equals("minecraft:redstone_wall_torch")
+				|| blockName.equals("minecraft:lever")
+				|| blockName.endsWith("_button")
+				|| blockName.equals("minecraft:dispenser")
+				|| blockName.equals("minecraft:dropper")
+				|| blockName.equals("minecraft:piston")
+				|| blockName.equals("minecraft:sticky_piston")
+				|| blockName.equals("minecraft:redstone_lamp");
 	}
 
 	private ScanBounds scanBounds(BlockPos origin) {
