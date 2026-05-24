@@ -2002,7 +2002,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		int checked = 0;
 		for (PlacedComponent component : placedComponents) {
 			for (SchematicBlock block : component.schematic().blocks()) {
-				if (!isUsefulOriginAnchor(block.blockName())) {
+				if (!isFunctionalCircuitBlock(block.blockName())) {
 					continue;
 				}
 				GridPoint rotated = rotatePoint(block.position().x(), block.position().z(), component.schematic().size().x(), component.schematic().size().z(), component.rotation());
@@ -2072,8 +2072,13 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	}
 
 	private boolean matchesKnownCircuitComponent(LitematicSchematic schematic, int gridX, int gridZ, int rotation, int planeYOffset, BlockPos origin, Set<BlockPos> occupied) {
-		int matchedRedstoneBlocks = 0;
+		int matchedFunctionalBlocks = 0;
+		int requiredFunctionalBlocks = 0;
 		for (SchematicBlock block : schematic.blocks()) {
+			if (!isFunctionalCircuitBlock(block.blockName())) {
+				continue;
+			}
+			requiredFunctionalBlocks++;
 			GridPoint rotated = rotatePoint(block.position().x(), block.position().z(), schematic.size().x(), schematic.size().z(), rotation);
 			BlockPos worldPos = origin.offset(gridX + rotated.x(), planeYOffset + block.position().y(), gridZ + rotated.z());
 			if (occupied.contains(worldPos)) {
@@ -2082,11 +2087,9 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			if (!worldBlockMatches(block, rotation, minecraft.level.getBlockState(worldPos))) {
 				return false;
 			}
-			if (isWorldRedstoneComponentName(block.blockName())) {
-				matchedRedstoneBlocks++;
-			}
+			matchedFunctionalBlocks++;
 		}
-		return matchedRedstoneBlocks >= 2;
+		return requiredFunctionalBlocks > 0 && matchedFunctionalBlocks == requiredFunctionalBlocks;
 	}
 
 	private static boolean worldBlockMatches(SchematicBlock expected, int rotation, BlockState actual) {
@@ -2098,8 +2101,11 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			return true;
 		}
 		if (expected.properties().containsKey("facing")) {
-			return actual.hasProperty(BlockStateProperties.FACING)
-					&& rotateFacing(expected.properties().get("facing"), rotation).equals(actual.getValue(BlockStateProperties.FACING).getName());
+			String expectedFacing = rotateFacing(expected.properties().get("facing"), rotation);
+			return (actual.hasProperty(BlockStateProperties.FACING)
+					&& expectedFacing.equals(actual.getValue(BlockStateProperties.FACING).getName()))
+					|| (actual.hasProperty(BlockStateProperties.HORIZONTAL_FACING)
+					&& expectedFacing.equals(actual.getValue(BlockStateProperties.HORIZONTAL_FACING).getName()));
 		}
 		return true;
 	}
@@ -2133,11 +2139,15 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	private static int redstoneBlockCount(LitematicSchematic schematic) {
 		int count = 0;
 		for (SchematicBlock block : schematic.blocks()) {
-			if (isWorldRedstoneComponentName(block.blockName())) {
+			if (isFunctionalCircuitBlock(block.blockName())) {
 				count++;
 			}
 		}
 		return count;
+	}
+
+	private static boolean isFunctionalCircuitBlock(String blockName) {
+		return isWorldRedstoneComponentName(blockName);
 	}
 
 	private static boolean isWorldRedstoneComponentName(String blockName) {
