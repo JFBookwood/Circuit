@@ -200,7 +200,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			return true;
 		}
 
-		if (button == 2 && isEditorArea(mouseX, mouseY)) {
+		if (button == 2 && mouseX > PANEL_WIDTH && mouseX < width - INSPECTOR_WIDTH) {
 			panning = true;
 			panStartMouseX = mouseX;
 			panStartMouseY = mouseY;
@@ -351,6 +351,11 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 
 	@Override
 	public boolean mouseReleased(double mouseX, double mouseY, int button) {
+		if (button == 2 && panning) {
+			panning = false;
+			return true;
+		}
+
 		if (button == 0 && drawingWire) {
 			wireEndGridX = screenToGridX((int) mouseX);
 			wireEndGridZ = screenToGridZ((int) mouseY);
@@ -365,11 +370,6 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			selectionEndGridZ = screenToGridZ((int) mouseY);
 			selectComponentsInBox();
 			selectingArea = false;
-			return true;
-		}
-
-		if (button == 2 && panning) {
-			panning = false;
 			return true;
 		}
 
@@ -1850,7 +1850,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		if (origin == null) {
 			origin = inferWorldOriginFromPlan();
 			if (origin == null) {
-				origin = minecraft.player.blockPosition().offset(2, 0, 2);
+				origin = minecraft.player.blockPosition();
 			}
 			origin = WorldPlacementState.originOrSet(origin);
 		}
