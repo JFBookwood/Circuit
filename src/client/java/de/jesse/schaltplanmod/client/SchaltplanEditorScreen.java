@@ -1847,8 +1847,10 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 
 		BlockPos origin = WorldPlacementState.origin();
+		boolean trustedOrigin = origin != null;
 		if (origin == null) {
 			origin = inferWorldOriginFromPlan();
+			trustedOrigin = origin != null;
 			if (origin == null) {
 				origin = minecraft.player.blockPosition();
 			}
@@ -1856,7 +1858,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		}
 		BlockPos scanOrigin = origin;
 
-		ScanBounds bounds = scanBounds(scanOrigin);
+		ScanBounds bounds = scanBounds(scanOrigin, trustedOrigin);
 		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
 		List<ScannedRedstone> scanned = new ArrayList<>();
 		List<ScannedRedstone> recognizedComponents = scanKnownCircuitComponents(bounds, scanOrigin, planeOffsets);
@@ -2167,7 +2169,8 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				|| blockName.equals("minecraft:redstone_lamp");
 	}
 
-	private ScanBounds scanBounds(BlockPos origin) {
+	private ScanBounds scanBounds(BlockPos origin, boolean trustedOrigin) {
+		BlockPos center = minecraft.player.blockPosition();
 		if (!WorldPlacementState.lastPlacedBlocks().isEmpty()) {
 			int minX = Integer.MAX_VALUE;
 			int minY = Integer.MAX_VALUE;
@@ -2183,31 +2186,29 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				maxY = Math.max(maxY, pos.getY());
 				maxZ = Math.max(maxZ, pos.getZ());
 			}
-			BlockPos center = minecraft.player.blockPosition();
 			return new ScanBounds(
-					Math.min(minX - 8, center.getX() - 24),
-					Math.min(minY - 4, center.getY() - 8),
-					Math.min(minZ - 8, center.getZ() - 24),
-					Math.max(maxX + 8, center.getX() + 24),
-					Math.max(maxY + 6, center.getY() + 16),
-					Math.max(maxZ + 8, center.getZ() + 24)
+					Math.min(minX - 12, center.getX() - 96),
+					Math.min(minY - 8, center.getY() - 48),
+					Math.min(minZ - 12, center.getZ() - 96),
+					Math.max(maxX + 12, center.getX() + 96),
+					Math.max(maxY + 12, center.getY() + 32),
+					Math.max(maxZ + 12, center.getZ() + 96)
 			);
 		}
 
-		if (!placedComponents.isEmpty()) {
+		if (trustedOrigin && !placedComponents.isEmpty()) {
 			Bounds bounds = boundsOf(placedComponents);
 			return new ScanBounds(
-					origin.getX() + bounds.minX() - 8,
-					origin.getY() - 4,
-					origin.getZ() + bounds.minZ() - 8,
-					origin.getX() + bounds.maxX() + 8,
-					origin.getY() + 32,
-					origin.getZ() + bounds.maxZ() + 8
+					Math.min(origin.getX() + bounds.minX() - 12, center.getX() - 96),
+					Math.min(origin.getY() - 8, center.getY() - 48),
+					Math.min(origin.getZ() + bounds.minZ() - 12, center.getZ() - 96),
+					Math.max(origin.getX() + bounds.maxX() + 12, center.getX() + 96),
+					Math.max(origin.getY() + 48, center.getY() + 32),
+					Math.max(origin.getZ() + bounds.maxZ() + 12, center.getZ() + 96)
 			);
 		}
 
-		BlockPos center = minecraft.player.blockPosition();
-		return new ScanBounds(center.getX() - 24, center.getY() - 8, center.getZ() - 24, center.getX() + 24, center.getY() + 16, center.getZ() + 24);
+		return new ScanBounds(center.getX() - 96, center.getY() - 48, center.getZ() - 96, center.getX() + 96, center.getY() + 32, center.getZ() + 96);
 	}
 
 	private void addScannedRedstone(List<ScannedRedstone> scanned) {
