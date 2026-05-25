@@ -1859,7 +1859,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		BlockPos scanOrigin = origin;
 
 		ScanBounds bounds = scanBounds(scanOrigin, trustedOrigin);
-		Map<Integer, Integer> planeOffsets = planeYOffsetByPlane();
+		Map<Integer, Integer> planeOffsets = scannedPlaneOffsets(bounds, scanOrigin);
 		List<ScannedRedstone> scanned = new ArrayList<>();
 		List<ScannedRedstone> recognizedComponents = scanKnownCircuitComponents(bounds, scanOrigin, planeOffsets);
 		Set<BlockPos> recognizedComponentBlocks = recognizedComponentBlocks(recognizedComponents, scanOrigin, planeOffsets);
@@ -2025,6 +2025,32 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		return score;
 	}
 
+	private Map<Integer, Integer> scannedPlaneOffsets(ScanBounds bounds, BlockPos origin) {
+		Set<Integer> levels = new LinkedHashSet<>();
+		for (int x = bounds.minX(); x <= bounds.maxX(); x++) {
+			for (int y = bounds.minY(); y <= bounds.maxY(); y++) {
+				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
+					BlockPos pos = new BlockPos(x, y, z);
+					BlockState state = minecraft.level.getBlockState(pos);
+					String blockName = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+					if (isFunctionalCircuitBlock(blockName)) {
+						levels.add(pos.getY() - origin.getY());
+					}
+				}
+			}
+		}
+		if (levels.isEmpty()) {
+			return planeYOffsetByPlane();
+		}
+
+		List<Integer> sortedLevels = levels.stream().sorted().toList();
+		Map<Integer, Integer> offsets = new LinkedHashMap<>();
+		for (int index = 0; index < sortedLevels.size(); index++) {
+			offsets.put(index, sortedLevels.get(index));
+		}
+		return offsets;
+	}
+
 	private static boolean isUsefulOriginAnchor(String blockName) {
 		return isWorldRedstoneComponentName(blockName)
 				|| blockName.equals("minecraft:yellow_concrete")
@@ -2036,10 +2062,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 	private List<ScannedRedstone> scanKnownCircuitComponents(ScanBounds bounds, BlockPos origin, Map<Integer, Integer> planeOffsets) {
 		List<ScannedRedstone> found = new ArrayList<>();
 		Set<BlockPos> occupied = new LinkedHashSet<>();
-		int minGridX = bounds.minX() - origin.getX();
-		int maxGridX = bounds.maxX() - origin.getX();
-		int minGridZ = bounds.minZ() - origin.getZ();
-		int maxGridZ = bounds.maxZ() - origin.getZ();
+		Map<String, List<BlockPos>> worldFunctionalBlocks = functionalWorldBlocks(bounds);
 		List<CircuitComponentType> componentTypes = CircuitComponentType.MENU_ORDER.stream()
 				.filter(SchaltplanEditorScreen::isKnownCircuitComponent)
 				.sorted((left, right) -> Integer.compare(
@@ -2048,23 +2071,32 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				))
 				.toList();
 
-		for (Map.Entry<Integer, Integer> planeEntry : planeOffsets.entrySet()) {
-			int plane = planeEntry.getKey();
-			for (CircuitComponentType type : componentTypes) {
-				LitematicSchematic schematic = schematics.get(type);
-				if (schematic == null) {
-					continue;
-				}
-				for (int rotation = 0; rotation < 4; rotation++) {
-					int sizeX = rotation % 2 == 0 ? schematic.size().x() : schematic.size().z();
-					int sizeZ = rotation % 2 == 0 ? schematic.size().z() : schematic.size().x();
-					for (int gridX = minGridX - sizeX; gridX <= maxGridX; gridX++) {
-						for (int gridZ = minGridZ - sizeZ; gridZ <= maxGridZ; gridZ++) {
-							if (matchesKnownCircuitComponent(schematic, gridX, gridZ, rotation, planeEntry.getValue(), origin, occupied)) {
-								ScannedRedstone component = new ScannedRedstone(type, gridX, gridZ, rotation, plane, schematic);
-								found.add(component);
-								occupied.addAll(worldBlocksFor(component, origin, planeOffsets));
-							}
+		for (CircuitComponentType type : componentTypes) {
+			LitematicSchematic schematic = schematics.get(type);
+			if (schematic == null) {
+				continue;
+			}
+			List<SchematicBlock> anchors = schematic.blocks().stream()
+					.filter(block -> isFunctionalCircuitBlock(block.blockName()))
+					.toList();
+			if (anchors.isEmpty()) {
+				continue;
+			}
+			for (int rotation = 0; rotation < 4; rotation++) {
+				for (SchematicBlock anchor : anchors) {
+					GridPoint rotatedAnchor = rotatePoint(anchor.position().x(), anchor.position().z(), schematic.size().x(), schematic.size().z(), rotation);
+					for (BlockPos worldAnchor : worldFunctionalBlocks.getOrDefault(anchor.blockName(), List.of())) {
+						int gridX = worldAnchor.getX() - origin.getX() - rotatedAnchor.x();
+						int gridZ = worldAnchor.getZ() - origin.getZ() - rotatedAnchor.z();
+						int baseY = worldAnchor.getY() - anchor.position().y();
+						if (!bounds.containsGrid(gridX, gridZ, origin)) {
+							continue;
+						}
+						if (matchesKnownCircuitComponent(schematic, gridX, gridZ, rotation, baseY, origin, occupied)) {
+							int plane = planeForExactBaseOffset(baseY - origin.getY(), planeOffsets);
+							ScannedRedstone component = new ScannedRedstone(type, gridX, gridZ, rotation, plane, schematic);
+							found.add(component);
+							occupied.addAll(worldBlocksFor(component, origin, planeOffsets));
 						}
 					}
 				}
@@ -2073,7 +2105,24 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 		return found;
 	}
 
-	private boolean matchesKnownCircuitComponent(LitematicSchematic schematic, int gridX, int gridZ, int rotation, int planeYOffset, BlockPos origin, Set<BlockPos> occupied) {
+	private Map<String, List<BlockPos>> functionalWorldBlocks(ScanBounds bounds) {
+		Map<String, List<BlockPos>> blocks = new LinkedHashMap<>();
+		for (int x = bounds.minX(); x <= bounds.maxX(); x++) {
+			for (int y = bounds.minY(); y <= bounds.maxY(); y++) {
+				for (int z = bounds.minZ(); z <= bounds.maxZ(); z++) {
+					BlockPos pos = new BlockPos(x, y, z);
+					BlockState state = minecraft.level.getBlockState(pos);
+					String blockName = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+					if (isFunctionalCircuitBlock(blockName)) {
+						blocks.computeIfAbsent(blockName, ignored -> new ArrayList<>()).add(pos);
+					}
+				}
+			}
+		}
+		return blocks;
+	}
+
+	private boolean matchesKnownCircuitComponent(LitematicSchematic schematic, int gridX, int gridZ, int rotation, int baseY, BlockPos origin, Set<BlockPos> occupied) {
 		int matchedFunctionalBlocks = 0;
 		int requiredFunctionalBlocks = 0;
 		for (SchematicBlock block : schematic.blocks()) {
@@ -2082,7 +2131,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 			}
 			requiredFunctionalBlocks++;
 			GridPoint rotated = rotatePoint(block.position().x(), block.position().z(), schematic.size().x(), schematic.size().z(), rotation);
-			BlockPos worldPos = origin.offset(gridX + rotated.x(), planeYOffset + block.position().y(), gridZ + rotated.z());
+			BlockPos worldPos = new BlockPos(origin.getX() + gridX + rotated.x(), baseY + block.position().y(), origin.getZ() + gridZ + rotated.z());
 			if (occupied.contains(worldPos)) {
 				return false;
 			}
@@ -2328,7 +2377,7 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 
 	private int planeForScannedBlock(BlockPos pos, BlockPos origin, LitematicSchematic schematic, CircuitComponentType type, Map<Integer, Integer> planeOffsets) {
 		if (type == CircuitComponentType.WIRE) {
-			int desiredOffset = pos.getY() - origin.getY() - redstoneWireAnchorY(schematic);
+			int desiredOffset = pos.getY() - origin.getY();
 			return planeAtOrBelowWorldY(desiredOffset, planeOffsets);
 		}
 
@@ -2389,6 +2438,17 @@ public class SchaltplanEditorScreen extends Screen implements GeneratedCircuitRe
 				.max(Map.Entry.comparingByValue())
 				.map(Map.Entry::getKey)
 				.orElse(activePlane);
+	}
+
+	private static int planeForExactBaseOffset(int desiredOffset, Map<Integer, Integer> planeOffsets) {
+		for (Map.Entry<Integer, Integer> entry : planeOffsets.entrySet()) {
+			if (entry.getValue() == desiredOffset) {
+				return entry.getKey();
+			}
+		}
+		int plane = planeOffsets.keySet().stream().mapToInt(Integer::intValue).max().orElse(-1) + 1;
+		planeOffsets.put(plane, desiredOffset);
+		return plane;
 	}
 
 	private boolean nonWireComponentAt(int gridX, int gridZ, int plane) {
